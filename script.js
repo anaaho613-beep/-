@@ -1,10 +1,12 @@
 // =====⚠️ تأكد إن الرابط ده = رابط الـ Web App النشط عندك =====
-const API_URL = 'https://script.google.com/macros/s/AKfycbz_EfSvxZ7PqK8sI_gfKEBER3FVE_Lu42HDZsC9XR9qw9zkmNCmkIU88x8l-IPrrOPc/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbxJoAHiQ9yaJvYNUf-Qh5zUdd_2sgi7-uICq1OpGgIB5yWbR8dQQ8wLX3rG8sJ71G74/exec';
+
 const RECEIPT_CONFIG = {
-storeName: 'الأصلي لقطع الغيار', storeTagline: 'الأصلي لقطع الغيار',
-storeAddress: 'العنوان: السويس', storePhone: '01000000000',
+storeName: 'ROR Print Store', storeTagline: 'نظام إدارة المطبعة',
+storeAddress: 'العنوان: الاسماعيليه/فايد', storePhone: '01007369226',
 welcomeMsg: 'شرفتونا', logoUrl: '', priceDecimals: 2, paperWidth: '80mm', receiptStart: 1, currency: 'ج.م'
 };
+
 const PERMISSIONS = [
 { id: 'dashboard', name: 'لوحة التحكم', icon: 'fa-grid-2' },
 { id: 'pos', name: 'نقطة البيع', icon: 'fa-cash-register' },
@@ -17,7 +19,9 @@ const PERMISSIONS = [
 { id: 'users', name: 'إدارة المستخدمين', icon: 'fa-user-shield' },
 { id: 'shift', name: 'تقفيل الشيفت', icon: 'fa-calculator' }
 ];
+
 const MONTH_NAMES = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+
 let charts = {};
 let selectedWasteProduct = null;
 let currentSection = 'dashboard';
@@ -30,6 +34,13 @@ let customerFilter = 'all';
 let posSearchTimer = null;
 let wasteSearchTimer = null;
 let collectionStatement = null;
+
+// ===== ✅ متغيرات جديدة: المخزون والتصنيفات والفواتير =====
+let inventoryCache = [];            // كل المنتجات
+let activeInventoryFilter = 'all';  // التبويب النشط (الكل أو اسم تصنيف)
+let invoicesListCache = [];         // آخر الفواتير
+let invoiceNameFilter = '';         // فلتر البحث بالاسم في نافذة الفواتير
+
 window.addEventListener('DOMContentLoaded', function () {
 var savedTheme = localStorage.getItem('theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
@@ -39,11 +50,38 @@ updateGreeting(); updateDateTime(); setInterval(updateDateTime, 1000);
 initCardEffects(); initKeyboardShortcuts(); initPeriodTabs();
 renderPermissionsCheckboxes([]); toggleRolePermissions();
 initInvoices(); checkSession();
+// ✅ احقن زرار الفواتير في نقطة البيع بعد ما الصفحة تجهز
+setTimeout(injectPosExtras, 500);
 });
+
+// ===== ✅ حقن عناصر نقطة البيع (زرار الفواتير + InstaPay grid) =====
+function injectPosExtras() {
+try {
+// 1) زرار الفواتير جنب زرار الطباعة
+if (!document.getElementById('open-invoices-btn')) {
+var btns = Array.prototype.slice.call(document.querySelectorAll('button'));
+var printBtn = btns.find(function (b) {
+var oc = (b.getAttribute('onclick') || '') + (b.textContent || '');
+return oc.indexOf('printActiveInvoice') !== -1 || (b.textContent || '').indexOf('طباعة') !== -1;
+});
+if (printBtn && printBtn.parentNode) {
+var inv = document.createElement('button');
+inv.id = 'open-invoices-btn';
+inv.className = 'btn-magnetic';
+inv.style.marginTop = '8px';
+inv.innerHTML = '<span class="btn-bg" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9)"></span><span class="btn-content"><i class="fas fa-file-invoice"></i><span>الفواتير المسجلة</span></span>';
+inv.onclick = openInvoicesModal;
+printBtn.parentNode.insertBefore(inv, printBtn.nextSibling);
+}
+}
+} catch (e) {}
+}
+
 function safeNum(v) { return Number(v) || 0; }
 function safeArray(arr) { return Array.isArray(arr) && arr.length ? arr : [0]; }
 function fmtMoney(v) { return safeNum(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function escapeHtml(text) { return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
 function toggleTheme() {
 var html = document.documentElement;
 var newTheme = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
@@ -95,9 +133,10 @@ card.addEventListener('mouseleave', function () { if (rafId) { cancelAnimationFr
 function initKeyboardShortcuts() {
 document.addEventListener('keydown', function (e) {
 if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCommandPalette(); }
-if (e.key === 'Escape') { closeCommandPalette(); closeCustomerModal(); }
+if (e.key === 'Escape') { closeCommandPalette(); closeCustomerModal(); closeEditProductModal(); closeInvoicesModal(); }
 });
 }
+
 var COMMANDS = [
 { id: 'dashboard', permission: 'dashboard', title: 'لوحة التحكم', desc: 'العودة للوحة التحكم', icon: 'fa-grid-2', action: function () { showSection('dashboard', document.querySelector('[data-section="dashboard"]')); } },
 { id: 'pos', permission: 'pos', title: 'نقطة البيع', desc: 'إضافة عملية بيع جديدة', icon: 'fa-cash-register', action: function () { showSection('pos', document.querySelector('[data-section="pos"]')); } },
@@ -109,10 +148,12 @@ var COMMANDS = [
 { id: 'reports', permission: 'reports', title: 'التقارير', desc: 'التقارير الشهرية', icon: 'fa-chart-mixed', action: function () { showSection('reports', document.querySelector('[data-section="reports"]')); } },
 { id: 'users', permission: 'users', title: 'المستخدمين', desc: 'إدارة المستخدمين', icon: 'fa-user-shield', action: function () { showSection('users', document.querySelector('[data-section="users"]')); } },
 { id: 'shift', permission: 'shift', title: 'تقفيل الشيفت', desc: 'تقرير شامل لفترة محددة', icon: 'fa-calculator', action: function () { showSection('shift', document.querySelector('[data-section="shift"]')); } },
+{ id: 'allinvoices', permission: 'pos', title: 'الفواتير المسجلة', desc: 'عرض وحذف الفواتير (مرتجعات)', icon: 'fa-file-invoice', action: function () { openInvoicesModal(); } },
 { id: 'refresh', permission: null, title: 'تحديث البيانات', desc: 'إعادة تحميل البيانات', icon: 'fa-arrows-rotate', action: function () { refreshCurrentSection(); } },
 { id: 'theme', permission: null, title: 'تبديل الثيم', desc: 'الوضع الليلي/النهاري', icon: 'fa-moon', action: function () { toggleTheme(); } },
 { id: 'logout', permission: null, title: 'تسجيل الخروج', desc: 'الخروج من النظام', icon: 'fa-arrow-right-from-bracket', action: function () { doLogout(); } }
 ];
+
 function getAllowedPermissions() {
 if (currentUser.role === 'manager') return PERMISSIONS.map(function (p) { return p.id; });
 var perms = Array.isArray(currentUser.permissions) ? currentUser.permissions : [];
@@ -138,6 +179,7 @@ return '<div class="command-item' + (idx === 0 ? ' active' : '') + '" onclick="e
 }).join('');
 }
 function executeCommand(id) { var cmd = COMMANDS.find(function (c) { return c.id === id; }); if (cmd) { closeCommandPalette(); cmd.action(); } }
+
 async function doLogin() {
 var username = document.getElementById('login-user').value.trim();
 var password = document.getElementById('login-pass').value.trim();
@@ -194,6 +236,7 @@ if (wasteHistory) wasteHistory.style.display = isManager ? '' : 'none';
 if (wasteLocked) wasteLocked.style.display = isManager ? 'none' : '';
 }
 function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
+
 async function apiGet(action, params) {
 params = params || {};
 var url = new URL(API_URL); url.searchParams.append('action', action);
@@ -208,6 +251,7 @@ var response = await fetch(API_URL, { method: 'POST', body: JSON.stringify(Objec
 if (!response.ok) throw new Error('Network error: ' + response.status);
 return await response.json();
 }
+
 function showSection(id, el) {
 var allowed = getAllowedPermissions();
 if (allowed.indexOf(id) === -1) { showToast('غير مصرح لك بالوصول لهذا القسم', 'error'); return; }
@@ -225,11 +269,13 @@ if (id === 'expenses') loadExpenses();
 if (id === 'waste') loadWaste();
 if (id === 'users') loadUsers();
 if (id === 'shift') loadShift();
+if (id === 'pos') setTimeout(injectPosExtras, 200);
 if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open');
 }
 function refreshCurrentSection() { var activeNav = document.querySelector('.nav-item.active'); showSection(currentSection, activeNav); showToast('تم تحديث البيانات', 'success', '✅'); }
 function showLoading() { document.getElementById('loading').classList.remove('hidden'); }
 function hideLoading() { document.getElementById('loading').classList.add('hidden'); }
+
 function showToast(message, type, title) {
 type = type || 'success';
 var container = document.getElementById('toast-container'); if (!container) return;
@@ -241,6 +287,7 @@ container.appendChild(toast);
 setTimeout(function () { if (toast.parentElement) { toast.style.animation = 'slideOutRight 0.3s forwards'; setTimeout(function () { toast.remove(); }, 300); } }, 3500);
 }
 function closeToast(btn) { var toast = btn.parentElement; toast.style.animation = 'slideOutRight 0.3s forwards'; setTimeout(function () { toast.remove(); }, 300); }
+
 function showConfirm(options) {
 return new Promise(function (resolve) {
 var overlay = document.createElement('div'); overlay.className = 'command-palette'; overlay.style.zIndex = '10001';
@@ -259,6 +306,7 @@ overlay.querySelector('#confirm-cancel').addEventListener('click', function () {
 overlay.querySelector('#confirm-ok').addEventListener('click', function () { close(true); });
 });
 }
+
 function generateSparkline(svgId, data, color) {
 color = color || '#3b82f6';
 var svg = document.getElementById(svgId); if (!svg) return;
@@ -279,6 +327,7 @@ if (progress < 1) requestAnimationFrame(update); else element.textContent = fina
 }
 requestAnimationFrame(update);
 }
+
 async function loadDashboard() {
 showLoading();
 try { var data = await apiGet('getDashboard'); if (data.error) throw new Error(data.error); renderDashboard(data); document.getElementById('last-update').textContent = 'الآن'; }
@@ -393,9 +442,10 @@ function renderPaymentBreakdown(list) {
 var container = document.getElementById('payment-breakdown-list'); if (!container) return;
 if (!list || !list.length) { container.innerHTML = '<div class="empty-state"><i class="fas fa-wallet"></i>لا توجد مدفوعات مسجّلة بعد</div>'; return; }
 var total = list.reduce(function (s, x) { return s + safeNum(x.amount); }, 0);
-container.innerHTML = list.map(function (x) { var amount = safeNum(x.amount); var pct = total > 0 ? (amount / total) * 100 : 0; return '<div class="pb-row"><div class="pb-icon" style="background:' + (x.color || '#71717a') + '"><i class="fas ' + (x.icon || 'fa-circle') + '"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">' + escapeHtml(x.label) + '</span><span><span class="pb-pct">' + pct.toFixed(1) + '%</span><span class="pb-amount">' + fmtMoney(amount) + ' ج.م</span></span></div><div class="pb-bar"><div class="pb-bar-fill" data-w="' + pct + '" style="background:' + (x.color || '#71717a') + '"></div></div></div></div>'; }).join('');
+container.innerHTML = list.map(function (x) { var amount = safeNum(x.amount); var pct = total > 0 ? (amount / total) * 100 : 0; return '<div class="pb-row"><div class="pb-icon" style="background:' + (x.color || '#71717a') + ';"><i class="fas ' + (x.icon || 'fa-circle') + '"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">' + escapeHtml(x.label) + '</span><span><span class="pb-pct">' + pct.toFixed(1) + '%</span><span class="pb-amount">' + fmtMoney(amount) + ' ج.م</span></span></div><div class="pb-bar"><div class="pb-bar-fill" data-w="' + pct + '" style="background:' + (x.color || '#71717a') + ';"></div></div></div></div>'; }).join('');
 setTimeout(function () { container.querySelectorAll('.pb-bar-fill').forEach(function (b) { b.style.width = (b.getAttribute('data-w') || 0) + '%'; }); }, 80);
 }
+
 // ===== POS Invoices =====
 function generateInvoiceId() { return 'inv' + Date.now() + '' + Math.floor(Math.random() * 1000); }
 function newInvoiceObj(id) { return { id: id, customer: '', phone: '', cart: [], paid: 0, paymentMethod: '', saved: false, savedMethod: null }; }
@@ -427,14 +477,24 @@ if (paid < 0) paid = 0; if (paid > total) paid = total; inv.paid = paid;
 if (paid <= 0) inv.paymentMethod = 'credit'; else if (!inv.paymentMethod || inv.paymentMethod === 'credit') inv.paymentMethod = 'cash';
 calcTotal(); renderPaymentButtons();
 }
+
+// ✅ طرق الدفع + InstaPay
 function renderPaymentButtons() {
 var box = document.getElementById('pos-payment-methods'); if (!box) return; var inv = getActiveInvoice();
-var methods = [{ id: 'cash', label: 'نقدي', icon: 'fa-money-bill-wave', cls: 'pay-cash' }, { id: 'vodafone', label: 'فودافون كاش', icon: 'fa-mobile-screen', cls: 'pay-vodafone' }, { id: 'credit', label: 'آجل', icon: 'fa-clock', cls: 'pay-credit' }];
+var methods = [
+{ id: 'cash', label: 'نقدي', icon: 'fa-money-bill-wave', cls: 'pay-cash' },
+{ id: 'vodafone', label: 'فودافون كاش', icon: 'fa-mobile-screen', cls: 'pay-vodafone' },
+{ id: 'instapay', label: 'InstaPay', icon: 'fa-building-columns', cls: 'pay-insta' },
+{ id: 'credit', label: 'آجل', icon: 'fa-clock', cls: 'pay-credit' }
+];
+// ✅ خلي الـ grid يستوعب 4 أزرار
+box.style.gridTemplateColumns = 'repeat(4, 1fr)';
 box.innerHTML = methods.map(function (m) {
 var stateCls = '', extra = '', disabled = '', onclick = 'onclick="setPaymentMethod(\'' + m.id + '\')"';
 if (inv.saved) { disabled = 'disabled'; onclick = ''; if (inv.savedMethod === m.id) { stateCls = 'active saved'; extra = '<i class="fas fa-check"></i>'; } else stateCls = 'disabled'; }
 else if (inv.paymentMethod === m.id) stateCls = 'active';
-return '<button class="pay-method-btn ' + stateCls + ' ' + m.cls + '" ' + onclick + ' ' + disabled + '><i class="fas ' + m.icon + '"></i><span>' + m.label + '</span>' + extra + '</button>';
+var bgStyle = m.id === 'instapay' && stateCls.indexOf('active') !== -1 ? ' style="background:linear-gradient(135deg,#8b5cf6,#6d28d9)"' : '';
+return '<button class="pay-method-btn ' + stateCls + ' ' + m.cls + '" ' + onclick + ' ' + disabled + bgStyle + '><i class="fas ' + m.icon + '"></i><span>' + m.label + '</span>' + extra + '</button>';
 }).join('');
 var badge = document.getElementById('pos-partial-badge');
 if (badge) { var total = currentInvoiceTotal(); var paid = safeNum(inv.paid); badge.style.display = (!inv.saved && total > 0 && paid > 0 && paid < total) ? 'inline-flex' : 'none'; }
@@ -464,7 +524,7 @@ try {
 var result = await apiPost('saveInvoice', { invoice: { customerName: inv.customer.trim(), paidAmount: paid, paymentMethod: method, cashier: currentUser.username || '', items: inv.cart.map(function (item) { return { productName: item.productName, quantity: item.quantity, unitPrice: item.unitPrice, totalPrice: item.total }; }) } });
 if (result.error) throw new Error(result.error);
 inv.saved = true; inv.savedMethod = method;
-var methodAr = { cash: 'نقدي', vodafone: 'فودافون كاش', credit: 'آجل' }[method] || method;
+var methodAr = { cash: 'نقدي', vodafone: 'فودافون كاش', credit: 'آجل', instapay: 'InstaPay' }[method] || method;
 showToast('تم الحفظ (' + methodAr + ') — ' + (result.status || '') + '. تقدر تطبع دلوقتي', 'success', '✅ فاتورة محفوظة');
 renderInvoiceTabs(); renderPaymentButtons();
 } catch (err) { showToast('خطأ: ' + err.message, 'error'); }
@@ -477,13 +537,13 @@ function buildReceiptHTML(inv, total, paid, unpaid) {
 var cfg = RECEIPT_CONFIG; var dec = cfg.priceDecimals; var receiptNo = getNextReceiptNumber(); var now = formatReceiptDate(new Date());
 var cashier = (currentUser && currentUser.username) ? currentUser.username : 'Manager';
 var fmtP = function (v) { return safeNum(v).toFixed(dec); };
-var phoneLine = (inv.phone && inv.phone.trim()) ? '<div class="info-row"><span class="lbl">TEL:</span><span>' + escapeHtml(inv.phone) + '</span></div>' : '';
+var phoneLine = (inv.phone && inv.phone.trim()) ? '<div class="info-row"><span class="lbl">TEL: </span><span>' + escapeHtml(inv.phone) + '</span></div>' : '';
 var logoBlock = cfg.logoUrl ? '<img src="' + cfg.logoUrl + '" alt="logo" style="max-width:140px; max-height:70px; display:block; margin:0 auto 6px;" />' : '<div style="font-size:26px; font-weight:900; letter-spacing:2px; text-align:center;">' + escapeHtml(cfg.storeName) + '</div>';
 var rows = (inv.cart || []).map(function (item) { return '<tr><td class="c-qty">' + safeNum(item.quantity) + '</td><td class="c-name">' + escapeHtml(item.productName) + '</td><td class="c-total">' + fmtP(item.total) + '</td></tr>'; }).join('');
-var partialBlock = (unpaid > 0.0001 || Math.abs(paid - total) > 0.0001) ? '<div class="line-row"><span>Paid</span><span>' + fmtP(paid) + '</span></div><div class="line-row"><span>Remaining</span><span>' + fmtP(unpaid) + '</span></div>' : '';
-var methodAr = { cash: 'نقدي', vodafone: 'فودافون كاش', credit: 'آجل' }[inv.paymentMethod || inv.savedMethod] || '';
-var methodLine = methodAr ? '<div class="line-row"><span>Payment</span><span>' + escapeHtml(methodAr) + '</span></div>' : '';
-return '<!DOCTYPE html><html lang="ar"><head><meta charset="UTF-8" /><title>Receipt #' + receiptNo + '</title><style>@page { size: ' + cfg.paperWidth + ' auto; margin: 0; } * { box-sizing: border-box; margin: 0; padding: 0; } html, body { width: ' + cfg.paperWidth + '; margin: 0; padding: 0; background: #fff; color: #000; font-family: "Courier New", "Tahoma", monospace; font-size: 12px; line-height: 1.5; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .receipt { padding: 6mm 4mm; direction: ltr; text-align: left; } .tagline { text-align: center; font-size: 11px; margin: 2px 0; direction: rtl; } .sub-tag { text-align: center; font-size: 10px; color: #333; margin-bottom: 6px; } .divider { border-top: 1px solid #000; margin: 6px 0; } .divider-thick { border-top: 2px solid #000; margin: 6px 0; } .divider-dash { border-top: 1px dashed #000; margin: 6px 0; } .info-row { display: flex; justify-content: space-between; gap: 8px; } .info-row .lbl { font-weight: 700; } .addr { direction: rtl; text-align: right; font-size: 11px; margin: 2px 0; } .meta { font-size: 11px; } table { width: 100%; border-collapse: collapse; margin: 4px 0; } th, td { padding: 2px 0; vertical-align: top; } th { font-weight: 700; } .c-qty, th.c-qty { width: 14%; text-align: left; } .c-name, th.c-name { width: 56%; text-align: center; direction: rtl; } .c-total, th.c-total { width: 30%; text-align: right; } .line-row { display: flex; justify-content: space-between; font-weight: 700; } .subtotal { font-size: 14px; font-weight: 800; } .welcome { text-align: center; direction: rtl; font-weight: 700; margin: 8px 0; } .served { text-align: center; margin-top: 6px; } .served .who { font-weight: 700; margin-top: 2px; } .footer-addr { text-align: center; direction: rtl; margin-top: 6px; font-weight: 700; } .footer-phone { text-align: center; direction: rtl; margin-top: 4px; font-size: 13px; } .phone-ico { font-size: 18px; } @media print { body { width: ' + cfg.paperWidth + '; } }</style></head><body><div class="receipt"><div class="logo">' + logoBlock + '</div><div class="tagline">' + escapeHtml(cfg.storeTagline) + '</div><div class="sub-tag">Cash — Bill</div><div class="divider"></div><div class="info-row"><span class="lbl">Name:</span><span class="rtl">' + escapeHtml(inv.customer || '') + '</span></div>' + phoneLine + '<div class="addr">' + escapeHtml(cfg.storeAddress) + '</div><div class="divider"></div><div class="meta">' + now + '</div><div class="info-row meta"><span class="lbl">RECEIPT#</span><span>' + receiptNo + '</span></div><div class="divider-thick"></div><table><thead><tr><th class="c-qty">QTY</th><th class="c-name">NAME</th><th class="c-total">Total</th></tr></thead><tbody>' + rows + '</tbody></table><div class="divider-dash"></div><div class="line-row subtotal"><span>Sub Total</span><span>' + fmtP(total) + '</span></div>' + partialBlock + methodLine + '<div class="divider-dash"></div><div class="welcome">' + escapeHtml(cfg.welcomeMsg) + '</div><div class="served"><div>You Have been served by:</div><div class="who">' + escapeHtml(cashier) + '</div></div><div class="divider"></div><div class="footer-addr">' + escapeHtml(cfg.storeAddress) + '</div><div class="footer-phone"><span class="phone-ico">☎</span> ' + escapeHtml(cfg.storePhone) + '</div></div></body></html>';
+var partialBlock = (unpaid > 0.0001 || Math.abs(paid - total) > 0.0001) ? '<div class="line-row"><span>Paid </span><span>' + fmtP(paid) + '</span></div><div class="line-row"><span>Remaining </span><span>' + fmtP(unpaid) + '</span></div>' : '';
+var methodAr = { cash: 'نقدي', vodafone: 'فودافون كاش', credit: 'آجل', instapay: 'InstaPay' }[inv.paymentMethod || inv.savedMethod] || '';
+var methodLine = methodAr ? '<div class="line-row"><span>Payment </span><span>' + escapeHtml(methodAr) + '</span></div>' : '';
+return '<!DOCTYPE html><html lang="ar"><head><meta charset="UTF-8" /><title>Receipt #' + receiptNo + '</title><style>@page { size: ' + cfg.paperWidth + ' auto; margin: 0; } * { box-sizing: border-box; margin: 0; padding: 0; } html, body { width: ' + cfg.paperWidth + '; margin: 0; padding: 0; background: #fff; color: #000; font-family: "Courier New", "Tahoma", monospace; font-size: 12px; line-height: 1.5; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .receipt { padding: 6mm 4mm; direction: ltr; text-align: left; } .tagline { text-align: center; font-size: 11px; margin: 2px 0; direction: rtl; } .sub-tag { text-align: center; font-size: 10px; color: #333; margin-bottom: 6px; } .divider { border-top: 1px solid #000; margin: 6px 0; } .divider-thick { border-top: 2px solid #000; margin: 6px 0; } .divider-dash { border-top: 1px dashed #000; margin: 6px 0; } .info-row { display: flex; justify-content: space-between; gap: 8px; } .info-row .lbl { font-weight: 700; } .addr { direction: rtl; text-align: right; font-size: 11px; margin: 2px 0; } .meta { font-size: 11px; } table { width: 100%; border-collapse: collapse; margin: 4px 0; } th, td { padding: 2px 0; vertical-align: top; } th { font-weight: 700; } .c-qty, th.c-qty { width: 14%; text-align: left; } .c-name, th.c-name { width: 56%; text-align: center; direction: rtl; } .c-total, th.c-total { width: 30%; text-align: right; } .line-row { display: flex; justify-content: space-between; font-weight: 700; } .subtotal { font-size: 14px; font-weight: 800; } .welcome { text-align: center; direction: rtl; font-weight: 700; margin: 8px 0; } .served { text-align: center; margin-top: 6px; } .served .who { font-weight: 700; margin-top: 2px; } .footer-addr { text-align: center; direction: rtl; margin-top: 6px; font-weight: 700; } .footer-phone { text-align: center; direction: rtl; margin-top: 4px; font-size: 13px; } .phone-ico { font-size: 18px; } @media print { body { width: ' + cfg.paperWidth + '; } }</style></head><body><div class="receipt"><div class="logo">' + logoBlock + '</div><div class="tagline">' + escapeHtml(cfg.storeTagline) + '</div><div class="sub-tag">Cash — Bill</div><div class="divider"></div><div class="info-row"><span class="lbl">Name: </span><span class="rtl">' + escapeHtml(inv.customer || '') + '</span></div>' + phoneLine + '<div class="addr">' + escapeHtml(cfg.storeAddress) + '</div><div class="divider"></div><div class="meta">' + now + '</div><div class="info-row meta"><span class="lbl">RECEIPT# </span><span>' + receiptNo + '</span></div><div class="divider-thick"></div><table><thead><tr><th class="c-qty">QTY</th><th class="c-name">NAME</th><th class="c-total">Total</th></tr></thead><tbody>' + rows + '</tbody></table><div class="divider-dash"></div><div class="line-row subtotal"><span>Sub Total </span><span>' + fmtP(total) + '</span></div>' + partialBlock + methodLine + '<div class="divider-dash"></div><div class="welcome">' + escapeHtml(cfg.welcomeMsg) + '</div><div class="served"><div>You Have been served by: </div><div class="who">' + escapeHtml(cashier) + '</div></div><div class="divider"></div><div class="footer-addr">' + escapeHtml(cfg.storeAddress) + '</div><div class="footer-phone"><span class="phone-ico">☎</span> ' + escapeHtml(cfg.storePhone) + '</div></div></body></html>';
 }
 function printReceiptHTML(html) {
 var iframe = document.createElement('iframe');
@@ -503,7 +563,6 @@ printReceiptHTML(buildReceiptHTML(inv, total, paid, Math.max(0, total - paid)));
 showToast('جاري إرسال الفاتورة للطابعة...', 'info', '🖨️ طباعة');
 }
 function searchPOS(query) { clearTimeout(posSearchTimer); if (query.length < 2) { document.getElementById('pos-search-results').classList.add('hidden'); return; } posSearchTimer = setTimeout(function () { doSearchPOS(query); }, 300); }
-// ✅ doSearchPOS - مع شارة "خدمة" للمنتجات غير المحدودة
 async function doSearchPOS(query) {
 var div = document.getElementById('pos-search-results'); if (!div) return;
 try {
@@ -511,39 +570,27 @@ var results = await apiGet('searchProducts', { query: query });
 if (results.error || !Array.isArray(results) || !results.length) div.innerHTML = '<div style="padding:16px; text-align:center; color:var(--text-tertiary);">لا توجد نتائج</div>';
 else div.innerHTML = results.map(function (p) {
 var isUnlimited = !!p.unlimited;
-var stockDisplay = isUnlimited
-? '<span style="color:#06b6d4; font-weight:700;">∞ خدمة</span>'
-: 'المخزون: ' + safeNum(p.stock);
-return '<div onclick="addToCart(\'' + encodeURIComponent(p.name) + '\', ' + (p.price || 0) + ', ' + (p.stock || 0) + ', ' + (isUnlimited ? 'true' : 'false') + ')"><div><div style="font-weight:600; color:var(--brand-blue-bright);">' + escapeHtml(p.name) + (isUnlimited ? ' <span style="font-size:9px; padding:1px 6px; background:rgba(6,182,212,0.15); color:#06b6d4; border-radius:999px; font-weight:700; margin-right:4px;">خدمة</span>' : '') + '</div><div style="font-size:11px; color:var(--text-tertiary); margin-top:2px;">' + stockDisplay + '</div></div><div style="font-weight:700; font-family:var(--font-mono);">' + safeNum(p.price) + ' ج.م</div></div>';
+var stockDisplay = isUnlimited ? '<span style="color:#06b6d4; font-weight:700;">∞ خدمة</span>' : 'المخزون: ' + safeNum(p.stock);
+var catTxt = (p.category || '').trim() ? ' · ' + escapeHtml(p.category) : '';
+return '<div onclick="addToCart(\'' + encodeURIComponent(p.name) + '\', ' + (p.price || 0) + ', ' + (p.stock || 0) + ', ' + (isUnlimited ? 'true' : 'false') + ')"><div><div style="font-weight:600; color:var(--brand-blue-bright);">' + escapeHtml(p.name) + (isUnlimited ? ' <span style="font-size:9px; padding:1px 6px; background:rgba(6,182,212,0.15); color:#06b6d4; border-radius:999px; font-weight:700; margin-right:4px;">خدمة</span>' : '') + '</div><div style="font-size:11px; color:var(--text-tertiary); margin-top:2px;">' + stockDisplay + catTxt + '</div></div><div style="font-weight:700; font-family:var(--font-mono);">' + safeNum(p.price) + ' ج.م</div></div>';
 }).join('');
 div.classList.remove('hidden');
 } catch (err) { showToast('خطأ: ' + err.message, 'error'); }
 }
-// ✅ addToCart - مع تجاوز فحص المخزون للمنتجات "الخدمة"
 function addToCart(encodedName, price, stock, unlimited) {
 var name = decodeURIComponent(encodedName); var inv = getActiveInvoice();
 if (inv.saved) { showToast('الفاتورة محفوظة — افتح فاتورة جديدة لإضافة منتجات', 'warning'); return; }
-// ✅ لو منتج خدمة، تجاوز فحص المخزون
 if (!unlimited && stock <= 0) { showToast('نفذ المخزون!', 'error'); return; }
 var existing = inv.cart.find(function (i) { return i.productId === name; });
 if (existing) {
-// ✅ لو منتج عادي، افحص الكمية
 if (!unlimited && existing.quantity >= stock) { showToast('الكمية المتاحة: ' + stock, 'warning'); return; }
 existing.quantity++;
 existing.total = existing.quantity * existing.unitPrice;
 } else {
-inv.cart.push({
-productId: name,
-productName: name,
-quantity: 1,
-unitPrice: price,
-total: price,
-unlimited: !!unlimited
-});
+inv.cart.push({ productId: name, productName: name, quantity: 1, unitPrice: price, total: price, unlimited: !!unlimited });
 }
 renderCart(); document.getElementById('pos-search-results').classList.add('hidden'); document.getElementById('pos-search').value = '';
 }
-// ✅ renderCart - مع شارة "خدمة" للمنتجات غير المحدودة
 function renderCart() {
 var inv = getActiveInvoice(); var div = document.getElementById('pos-cart'); var countEl = document.getElementById('cart-count');
 var totalItems = inv.cart.reduce(function (sum, i) { return sum + i.quantity; }, 0); if (countEl) countEl.textContent = totalItems; if (!div) return;
@@ -557,14 +604,8 @@ calcTotal();
 function updateQty(idx, change) {
 var inv = getActiveInvoice(); if (inv.saved) return;
 var item = inv.cart[idx];
-// ✅ للمنتجات "الخدمة" لا يوجد حد أقصى للكمية
-if (!item.unlimited) {
 item.quantity += change;
 if (item.quantity <= 0) { inv.cart.splice(idx, 1); renderCart(); return; }
-} else {
-item.quantity += change;
-if (item.quantity <= 0) { inv.cart.splice(idx, 1); renderCart(); return; }
-}
 item.total = item.quantity * item.unitPrice;
 renderCart();
 }
@@ -575,11 +616,92 @@ var paidInput = document.getElementById('pos-paid'); var paid = Number(paidInput
 document.getElementById('pos-total').innerText = total.toFixed(2) + ' ج.م';
 document.getElementById('pos-unpaid').value = Math.max(0, total - paid).toFixed(2);
 }
+
+// ══════════════════════════════════════════════════════════
+// ✅ المخزون + التصنيفات الحرة + تعديل المنتج
+// ══════════════════════════════════════════════════════════
 async function loadInventory() {
 showLoading();
 try {
-var products = await apiGet('getProducts'); var data = Array.isArray(products) ? products : []; var table = document.getElementById('inventory-table'); if (!table) return;
-if (!data.length) { table.innerHTML = '<tr><td colspan="7" style="padding:24px; text-align:center; color:var(--text-tertiary);">لا توجد منتجات</td></tr>'; hideLoading(); return; }
+var products = await apiGet('getProducts');
+inventoryCache = Array.isArray(products) ? products : [];
+injectCategoryField();
+renderCategoryTabs();
+renderInventoryTable();
+} catch (err) { showToast('خطأ: ' + err.message, 'error'); }
+hideLoading();
+}
+
+// ✅ احقن حقل التصنيف في نموذج إضافة منتج (مرة واحدة)
+function injectCategoryField() {
+if (document.getElementById('new-product-category')) return;
+var anchor = document.getElementById('new-product-original');
+if (!anchor) return;
+var fieldDiv = anchor.closest('.input-field');
+if (!fieldDiv) return;
+var wrap = document.createElement('div');
+wrap.className = 'input-field';
+wrap.innerHTML = '<i class="fas fa-tags input-icon"></i>' +
+'<input type="text" id="new-product-category" placeholder=" " autocomplete="off" list="category-suggestions" />' +
+'<label>التصنيف (اختياري)</label>' +
+'<div class="input-border"></div>';
+fieldDiv.parentNode.insertBefore(wrap, fieldDiv.nextSibling);
+// datalist للاقتراحات (تقدر تكتب أي تصنيف جديد بحرية)
+if (!document.getElementById('category-suggestions')) {
+var dl = document.createElement('datalist');
+dl.id = 'category-suggestions';
+document.body.appendChild(dl);
+}
+updateCategorySuggestions();
+}
+function updateCategorySuggestions() {
+var dl = document.getElementById('category-suggestions');
+if (!dl) return;
+var cats = {};
+inventoryCache.forEach(function (p) { var c = (p.category || '').trim(); if (c) cats[c] = true; });
+dl.innerHTML = Object.keys(cats).map(function (c) { return '<option value="' + escapeHtml(c) + '">'; }).join('');
+}
+
+// ✅ تابات التصنيفات فوق جدول المنتجات
+function renderCategoryTabs() {
+var table = document.getElementById('inventory-table');
+if (!table) return;
+var container = document.getElementById('inventory-category-tabs');
+if (!container) {
+container = document.createElement('div');
+container.id = 'inventory-category-tabs';
+container.className = 'customer-tabs';
+container.style.marginBottom = '16px';
+container.style.flexWrap = 'wrap';
+var holder = table.closest('.glass-panel') || table.parentNode;
+if (holder) holder.insertBefore(container, table.closest('.table-responsive') || table);
+else return;
+}
+var cats = {};
+inventoryCache.forEach(function (p) { var c = (p.category || '').trim() || 'بدون تصنيف'; cats[c] = (cats[c] || 0) + 1; });
+var keys = Object.keys(cats).sort(function (a, b) { return a.localeCompare(b, 'ar'); });
+var html = '<button class="customer-tab' + (activeInventoryFilter === 'all' ? ' active' : '') + '" onclick="setInventoryFilter(\'all\')">الكل <span class="tab-count">' + inventoryCache.length + '</span></button>';
+keys.forEach(function (c) {
+var active = activeInventoryFilter === c ? ' active' : '';
+html += '<button class="customer-tab' + active + '" onclick="setInventoryFilter(\'' + encodeURIComponent(c) + '\')">' + escapeHtml(c) + ' <span class="tab-count">' + cats[c] + '</span></button>';
+});
+container.innerHTML = html;
+}
+function setInventoryFilter(val) {
+activeInventoryFilter = val === 'all' ? 'all' : decodeURIComponent(val);
+renderCategoryTabs();
+renderInventoryTable();
+}
+
+// ✅ جدول المنتجات مع التصنيف + زر تعديل + زر تبديل خدمة
+function renderInventoryTable() {
+var table = document.getElementById('inventory-table');
+if (!table) return;
+var data = inventoryCache;
+if (activeInventoryFilter !== 'all') {
+data = data.filter(function (p) { var c = (p.category || '').trim() || 'بدون تصنيف'; return c === activeInventoryFilter; });
+}
+if (!data.length) { table.innerHTML = '<tr><td colspan="7" style="padding:24px; text-align:center; color:var(--text-tertiary);">لا توجد منتجات</td></tr>'; return; }
 table.innerHTML = data.map(function (p) {
 var stock = safeNum(p.currentStock);
 var isUnlimited = !!p.unlimited;
@@ -588,13 +710,44 @@ if (isUnlimited) status = '<span class="badge" style="background:rgba(6,182,212,
 else if (stock <= 0) status = '<span class="badge badge-red">نفذ</span>';
 else if (stock <= 5) status = '<span class="badge badge-orange">منخفض</span>';
 else status = '<span class="badge badge-green">متوفر</span>';
-var toggleBtn = '<button class="unlimited-toggle' + (isUnlimited ? ' is-on' : '') + '" onclick="toggleUnlimited(\'' + encodeURIComponent(p.productName) + '\', ' + (isUnlimited ? 'false' : 'true') + ')" title="' + (isUnlimited ? 'إرجاعه منتج عادي (يتتبع المخزون)' : 'تحويله لمنتج خدمة (بدون تتبع كمية)') + '"><i class="fas ' + (isUnlimited ? 'fa-infinity' : 'fa-box') + '"></i><span>' + (isUnlimited ? 'خدمة' : 'عادي') + '</span></button>';
-return '<tr><td style="font-weight:600;">' + escapeHtml(p.productName || '') + '</td><td style="font-family:var(--font-mono);">' + (isUnlimited ? '<span style="color:#06b6d4; font-weight:700;">∞</span>' : stock) + '</td><td style="font-family:var(--font-mono);">' + safeNum(p.deductQty) + '</td><td style="font-family:var(--font-mono); color:#fbbf24;">' + safeNum(p.wastedQty) + '</td><td style="font-family:var(--font-mono);">' + safeNum(p.unitPrice) + ' ج.م</td><td style="font-family:var(--font-mono);">' + safeNum(p.originalPrice) + ' ج.م</td><td><div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">' + status + toggleBtn + '</div></td></tr>';
+var catBadge = (p.category || '').trim()
+? '<div style="margin-top:3px;"><span class="badge badge-blue">' + escapeHtml(p.category) + '</span></div>'
+: '';
+var toggleBtn = '<button class="unlimited-toggle' + (isUnlimited ? ' is-on' : '') + '" onclick="toggleUnlimited(\'' + encodeURIComponent(p.productName) + '\', ' + (isUnlimited ? 'false' : 'true') + ')" title="' + (isUnlimited ? 'إرجاعه منتج عادي' : 'تحويله لمنتج خدمة') + '"><i class="fas ' + (isUnlimited ? 'fa-infinity' : 'fa-box') + '"></i><span>' + (isUnlimited ? 'خدمة' : 'عادي') + '</span></button>';
+var editBtn = '<button class="unlimited-toggle" onclick="openEditProduct(\'' + encodeURIComponent(p.productName) + '\')" title="تعديل المنتج"><i class="fas fa-pen"></i><span>تعديل</span></button>';
+return '<tr>' +
+'<td style="font-weight:600;">' + escapeHtml(p.productName || '') + catBadge + '</td>' +
+'<td style="font-family:var(--font-mono);">' + (isUnlimited ? '<span style="color:#06b6d4; font-weight:700;">∞</span>' : stock) + '</td>' +
+'<td style="font-family:var(--font-mono);">' + safeNum(p.deductQty) + '</td>' +
+'<td style="font-family:var(--font-mono); color:#fbbf24;">' + safeNum(p.wastedQty) + '</td>' +
+'<td style="font-family:var(--font-mono);">' + safeNum(p.unitPrice) + ' ج.م</td>' +
+'<td style="font-family:var(--font-mono);">' + safeNum(p.originalPrice) + ' ج.م</td>' +
+'<td><div style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">' + status + '<div style="display:flex; gap:6px;">' + toggleBtn + editBtn + '</div></div></td>' +
+'</tr>';
 }).join('');
+}
+
+// ✅ إضافة منتج (مع التصنيف الحر)
+async function addProduct() {
+var name = document.getElementById('new-product-name').value.trim();
+var qty = Number(document.getElementById('new-product-qty').value) || 0;
+var price = Number(document.getElementById('new-product-price').value) || 0;
+var original = Number(document.getElementById('new-product-original').value) || 0;
+var catEl = document.getElementById('new-product-category');
+var category = catEl ? catEl.value.trim() : '';
+if (!name) { showToast('اسم المنتج مطلوب', 'error'); return; }
+showLoading();
+try {
+var result = await apiPost('addProduct', { product: { name: name, stock: qty, price: price, originalPrice: original, category: category } });
+if (result.error) throw new Error(result.error);
+showToast(result.message || 'تم إضافة المنتج بنجاح', 'success', '✅ منتج جديد');
+['new-product-name','new-product-qty','new-product-price','new-product-original','new-product-category'].forEach(function (id) { var el = document.getElementById(id); if (el) el.value = ''; });
+loadInventory();
 } catch (err) { showToast('خطأ: ' + err.message, 'error'); }
 hideLoading();
 }
-// ===== ✅ تبديل منتج عادي / خدمة =====
+
+// ✅ تبديل منتج عادي / خدمة
 async function toggleUnlimited(encodedName, makeUnlimited) {
 var name = decodeURIComponent(encodedName);
 showLoading();
@@ -606,26 +759,187 @@ loadInventory();
 } catch (err) { showToast('خطأ: ' + err.message, 'error'); }
 hideLoading();
 }
-// ✅ إضافة منتج — الاسم فقط إجباري (الكمية وسعر التكلفة اختياري)
-async function addProduct() {
-var name = document.getElementById('new-product-name').value.trim(); var qty = Number(document.getElementById('new-product-qty').value) || 0;
-var price = Number(document.getElementById('new-product-price').value) || 0; var original = Number(document.getElementById('new-product-original').value) || 0;
+
+// ══════════════════════════════════════════════════════════
+// ✅ نافذة تعديل المنتج
+// ══════════════════════════════════════════════════════════
+function openEditProduct(encodedName) {
+var name = decodeURIComponent(encodedName);
+var product = inventoryCache.find(function (p) { return p.productName === name; });
+if (!product) { showToast('المنتج غير موجود', 'error'); return; }
+var modal = document.getElementById('edit-product-modal');
+if (!modal) { modal = document.createElement('div'); modal.id = 'edit-product-modal'; modal.className = 'command-palette'; modal.style.zIndex = '10001'; document.body.appendChild(modal); }
+modal.innerHTML =
+'<div class="command-overlay" onclick="closeEditProductModal()"></div>' +
+'<div class="command-modal" style="max-width:520px;">' +
+'<div style="padding:24px;">' +
+'<h3 style="font-size:20px; font-weight:700; margin-bottom:4px;"><i class="fas fa-pen" style="color:var(--brand-blue-bright);"></i> تعديل المنتج</h3>' +
+'<p style="color:var(--text-tertiary); font-size:13px; margin-bottom:20px;">الاسم ثابت — عدّل الكميه والأسعار والتصنيف</p>' +
+'<div style="display:flex; flex-direction:column; gap:14px;">' +
+'<div class="input-field"><i class="fas fa-box input-icon"></i><input type="text" id="edit-product-name" value="' + escapeHtml(product.productName) + '" readonly style="opacity:0.6; cursor:not-allowed;" /><label>اسم المنتج</label><div class="input-border"></div></div>' +
+'<div class="input-field"><i class="fas fa-cubes input-icon"></i><input type="number" id="edit-product-stock" value="' + safeNum(product.currentStock) + '" placeholder=" " /><label>الكمية الحالية</label><div class="input-border"></div></div>' +
+'<div class="input-field"><i class="fas fa-tag input-icon"></i><input type="number" step="0.01" id="edit-product-price" value="' + safeNum(product.unitPrice) + '" placeholder=" " /><label>سعر البيع</label><div class="input-border"></div></div>' +
+'<div class="input-field"><i class="fas fa-coins input-icon"></i><input type="number" step="0.01" id="edit-product-cost" value="' + safeNum(product.originalPrice) + '" placeholder=" " /><label>سعر التكلفة</label><div class="input-border"></div></div>' +
+'<div class="input-field"><i class="fas fa-tags input-icon"></i><input type="text" id="edit-product-category" value="' + escapeHtml(product.category || '') + '" placeholder=" " list="category-suggestions" autocomplete="off" /><label>التصنيف</label><div class="input-border"></div></div>' +
+'</div>' +
+'<div style="display:flex; gap:12px; margin-top:22px;">' +
+'<button onclick="closeEditProductModal()" style="flex:1; padding:12px; background:var(--bg-hover); border:1px solid var(--border-default); border-radius:var(--radius-md); color:var(--text-primary); font-weight:600; cursor:pointer; font-family:inherit;">إلغاء</button>' +
+'<button onclick="saveProductEdit()" style="flex:1; padding:12px; background:var(--gradient-green); border:none; border-radius:var(--radius-md); color:white; font-weight:600; cursor:pointer; font-family:inherit; box-shadow:0 4px 12px rgba(16,185,129,0.3);"><i class="fas fa-check"></i> حفظ التعديلات</button>' +
+'</div>' +
+'</div>' +
+'</div>';
+modal.classList.remove('hidden');
+}
+function closeEditProductModal() { var modal = document.getElementById('edit-product-modal'); if (modal) modal.classList.add('hidden'); }
+async function saveProductEdit() {
+var name = document.getElementById('edit-product-name').value.trim();
+var stock = Number(document.getElementById('edit-product-stock').value) || 0;
+var price = Number(document.getElementById('edit-product-price').value) || 0;
+var cost = Number(document.getElementById('edit-product-cost').value) || 0;
+var category = document.getElementById('edit-product-category').value.trim();
 if (!name) { showToast('اسم المنتج مطلوب', 'error'); return; }
 showLoading();
 try {
-var result = await apiPost('addProduct', { product: { name: name, stock: qty, price: price, originalPrice: original } }); if (result.error) throw new Error(result.error);
-showToast(result.message || 'تم إضافة المنتج بنجاح', 'success', '✅ منتج جديد');
-['new-product-name','new-product-qty','new-product-price','new-product-original'].forEach(function (id) { var el = document.getElementById(id); if (el) el.value = ''; });
+var result = await apiPost('updateProduct', { originalName: name, stock: stock, price: price, originalPrice: cost, category: category });
+if (result.error) throw new Error(result.error);
+showToast(result.message || 'تم تحديث المنتج بنجاح', 'success', '✅ تحديث');
+closeEditProductModal();
 loadInventory();
 } catch (err) { showToast('خطأ: ' + err.message, 'error'); }
 hideLoading();
 }
-async function loadCustomers() {
+
+// ══════════════════════════════════════════════════════════
+// ✅ نافذة الفواتير المسجلة (آخر 100 + بحث بالاسم + حذف/مرتجع)
+// ══════════════════════════════════════════════════════════
+async function openInvoicesModal() {
+var modal = document.getElementById('invoices-modal');
+if (!modal) { modal = document.createElement('div'); modal.id = 'invoices-modal'; modal.className = 'command-palette'; modal.style.zIndex = '10000'; document.body.appendChild(modal); }
+modal.classList.remove('hidden');
+modal.innerHTML = '<div class="command-overlay" onclick="closeInvoicesModal()"></div><div class="command-modal" style="max-width:820px;"><div style="padding:24px;"><div class="empty-state"><i class="fas fa-spinner fa-spin"></i>جاري تحميل الفواتير...</div></div></div>';
+try {
+var data = await apiGet('getInvoicesList', { limit: 100 });
+invoicesListCache = Array.isArray(data) ? data : [];
+invoiceNameFilter = '';
+renderInvoicesModal();
+} catch (err) {
+modal.innerHTML = '<div class="command-overlay" onclick="closeInvoicesModal()"></div><div class="command-modal" style="max-width:820px;"><div style="padding:24px;"><div class="empty-state"><i class="fas fa-triangle-exclamation"></i>' + escapeHtml(err.message) + '</div></div></div>';
+}
+}
+function closeInvoicesModal() { var modal = document.getElementById('invoices-modal'); if (modal) modal.classList.add('hidden'); }
+function onInvoiceFilterChange(val) { invoiceNameFilter = val || ''; renderInvoicesListOnly(); }
+function renderInvoicesModal() {
+var modal = document.getElementById('invoices-modal');
+if (!modal) return;
+modal.innerHTML =
+'<div class="command-overlay" onclick="closeInvoicesModal()"></div>' +
+'<div class="command-modal" style="max-width:860px;">' +
+'<div style="padding:24px;">' +
+'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">' +
+'<h3 style="font-size:20px; font-weight:700; margin:0;"><i class="fas fa-file-invoice" style="color:var(--brand-blue-bright);"></i> الفواتير المسجلة <span style="font-size:13px; color:var(--text-tertiary); font-weight:500;">(آخر ' + invoicesListCache.length + ')</span></h3>' +
+'<button onclick="closeInvoicesModal()" style="background:var(--bg-hover); border:1px solid var(--border-default); border-radius:var(--radius-md); color:var(--text-primary); padding:8px 14px; cursor:pointer; font-family:inherit;"><i class="fas fa-times"></i> إغلاق</button>' +
+'</div>' +
+'<div class="input-field" style="margin-bottom:16px;"><i class="fas fa-search input-icon"></i><input type="text" id="invoice-name-filter" value="' + escapeHtml(invoiceNameFilter) + '" placeholder=" " oninput="onInvoiceFilterChange(this.value)" autocomplete="off" /><label>ابحث باسم العميل أو المنتج</label><div class="input-border"></div></div>' +
+'<div style="max-height:60vh; overflow:auto; border:1px solid var(--border-subtle); border-radius:var(--radius-md);">' +
+'<table class="table-modern"><thead><tr><th>التاريخ</th><th>العميل</th><th>المنتجات</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th><th></th></tr></thead>' +
+'<tbody id="invoices-list-body"></tbody></table>' +
+'</div>' +
+'<p style="font-size:12px; color:var(--text-tertiary); margin-top:12px;"><i class="fas fa-circle-info"></i> حذف فاتورة = مرتجع: يتم إرجاع الكميات للمخزون تلقائياً وإزالة الفاتورة من السجل.</p>' +
+'</div>' +
+'</div>';
+renderInvoicesListOnly();
+}
+function renderInvoicesListOnly() {
+var body = document.getElementById('invoices-list-body');
+if (!body) return;
+var q = invoiceNameFilter.trim().toLowerCase();
+var data = invoicesListCache;
+if (q) {
+data = data.filter(function (inv) {
+return ((inv.customer || '') + ' ' + (inv.product || '')).toLowerCase().indexOf(q) !== -1;
+});
+}
+if (!data.length) { body.innerHTML = '<tr><td colspan="8" style="padding:24px; text-align:center; color:var(--text-tertiary);">لا توجد فواتير مطابقة</td></tr>'; return; }
+body.innerHTML = data.map(function (inv) {
+var badge = inv.status === 'تم الدفع' ? 'badge-green' : (inv.status === 'دفع جزء' ? 'badge-orange' : 'badge-red');
+return '<tr>' +
+'<td style="font-family:var(--font-mono); font-size:12px; white-space:nowrap;">' + escapeHtml(inv.date) + (inv.time ? '<br><span style="color:var(--text-tertiary);">' + escapeHtml(inv.time) + '</span>' : '') + '</td>' +
+'<td style="font-weight:600;">' + escapeHtml(inv.customer) + '</td>' +
+'<td style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeHtml(inv.product) + '">' + escapeHtml(inv.product) + '</td>' +
+'<td style="font-family:var(--font-mono);">' + fmtMoney(inv.total) + '</td>' +
+'<td style="font-family:var(--font-mono); color:var(--success-bright);">' + fmtMoney(inv.paid) + '</td>' +
+'<td style="font-family:var(--font-mono); color:var(--danger-bright);">' + fmtMoney(inv.unpaid) + '</td>' +
+'<td><span class="badge ' + badge + '">' + escapeHtml(inv.status) + '</span></td>' +
+'<td><button onclick="confirmDeleteInvoice(' + inv.rowId + ', \'' + encodeURIComponent(inv.customer) + '\', ' + inv.total + ')" style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); color:var(--danger-bright); border-radius:var(--radius-md); padding:6px 12px; cursor:pointer; font-family:inherit; font-size:12px; white-space:nowrap;"><i class="fas fa-trash"></i> حذف</button></td>' +
+'</tr>';
+}).join('');
+}
+async function confirmDeleteInvoice(rowId, encodedCustomer, total) {
+var customer = decodeURIComponent(encodedCustomer || '');
+var confirmed = await showConfirm({
+title: 'حذف فاتورة (مرتجع)',
+message: 'سيتم حذف الفاتورة نهائياً وإرجاع الكميات للمخزون. لا يمكن التراجع عن هذه الخطوة.',
+confirmText: 'نعم، احذف الفاتورة', cancelText: 'إلغاء', icon: 'fa-trash',
+details: [{ label: 'العميل', value: customer || '—' }, { label: 'قيمة الفاتورة', value: fmtMoney(total) + ' ج.م' }]
+});
+if (!confirmed) return;
 showLoading();
-try { var customers = await apiGet('getCustomers'); customersCache = Array.isArray(customers) ? customers : []; renderCustomersTable(); }
-catch (err) { showToast('خطأ: ' + err.message, 'error'); }
+try {
+var result = await apiPost('deleteInvoice', { rowId: rowId });
+if (result.error) throw new Error(result.error);
+showToast(result.message || 'تم حذف الفاتورة وإرجاع الكميات', 'success', '✅ مرتجع');
+// أعد تحميل قائمة الفواتير
+var data = await apiGet('getInvoicesList', { limit: 100 });
+invoicesListCache = Array.isArray(data) ? data : [];
+renderInvoicesListOnly();
+} catch (err) { showToast('خطأ: ' + err.message, 'error'); }
 hideLoading();
 }
+
+// ══════════════════════════════════════════════════════════
+// كشف حساب + العملاء
+// ══════════════════════════════════════════════════════════
+async function loadCustomers() {
+showLoading();
+try {
+var customers = await apiGet('getCustomers');
+customersCache = Array.isArray(customers) ? customers : [];
+renderCustomersSummary();
+renderCustomersTable();
+} catch (err) { showToast('خطأ: ' + err.message, 'error'); }
+hideLoading();
+}
+
+// ✅ داش بورد إجمالي فوق قائمة العملاء
+function renderCustomersSummary() {
+var table = document.getElementById('customers-table');
+if (!table) return;
+var container = document.getElementById('customers-summary');
+if (!container) {
+container = document.createElement('div');
+container.id = 'customers-summary';
+container.className = 'grid-4';
+container.style.marginBottom = '16px';
+var holder = table.closest('.glass-panel') || table.parentNode;
+if (holder) holder.insertBefore(container, table.closest('.table-responsive') || table);
+else return;
+}
+var totalBilled = 0, totalPaid = 0, totalUnpaid = 0;
+customersCache.forEach(function (c) { totalBilled += safeNum(c[2]); totalPaid += safeNum(c[3]); totalUnpaid += safeNum(c[4]); });
+var net = totalBilled - totalUnpaid;
+function card(label, value, color, icon) {
+return '<div style="padding:16px; background:var(--bg-surface); border:1px solid ' + color + '33; border-radius:var(--radius-md);">' +
+'<div style="font-size:11px; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;"><i class="fas ' + icon + '"></i> ' + label + '</div>' +
+'<div style="font-size:22px; font-weight:800; color:' + color + '; font-family:var(--font-mono);">' + fmtMoney(value) + ' ج.م</div>' +
+'</div>';
+}
+container.innerHTML =
+card('إجمالي كل الفواتير', totalBilled, '#60a5fa', 'fa-file-invoice') +
+card('إجمالي المدفوع', totalPaid, '#34d399', 'fa-check') +
+card('إجمالي المديونيات', totalUnpaid, '#f87171', 'fa-hand-holding-dollar') +
+card('صافي المحصل', net, '#fbbf24', 'fa-coins');
+}
+
 function setCustomerFilter(filter, el) { customerFilter = filter; document.querySelectorAll('.customer-tab').forEach(function (t) { t.classList.remove('active'); }); if (el) el.classList.add('active'); renderCustomersTable(); }
 function renderCustomersTable() {
 var table = document.getElementById('customers-table'); if (!table) return;
@@ -637,6 +951,31 @@ var list = all; if (customerFilter === 'debtor') list = debtors; if (customerFil
 if (!list.length) { table.innerHTML = '<tr><td colspan="6" style="padding:24px; text-align:center; color:var(--text-tertiary);">لا يوجد عملاء في هذا التصنيف</td></tr>'; return; }
 table.innerHTML = list.map(function (c) { var status = c.unpaid > 0 ? '<span class="badge badge-red">مديون</span>' : '<span class="badge badge-green">خالص</span>'; var encoded = encodeURIComponent(c.name); return '<tr class="customer-row" onclick="openCustomerInvoices(\'' + encoded + '\')"><td style="font-weight:600;">' + escapeHtml(c.name) + '</td><td style="font-family:var(--font-mono);">' + c.total.toFixed(2) + ' ج.م</td><td style="font-family:var(--font-mono); color:var(--success-bright);">' + c.paid.toFixed(2) + ' ج.م</td><td style="font-family:var(--font-mono); color:var(--danger-bright);">' + c.unpaid.toFixed(2) + ' ج.م</td><td>' + status + '</td><td><button class="btn-ghost" onclick="event.stopPropagation(); openCustomerInvoices(\'' + encoded + '\')"><i class="fas fa-file-invoice"></i> الفواتير (' + c.visits + ')</button></td></tr>'; }).join('');
 }
+
+// ✅ زرار إلغاء نتيجة البحث في كشف حساب
+function clearCustomerSearch() {
+var s = document.getElementById('customer-search'); if (s) s.value = '';
+var m = document.getElementById('customer-month'); if (m) m.value = '';
+var y = document.getElementById('customer-year'); if (y) y.value = '';
+var results = document.getElementById('customer-results'); if (results) results.innerHTML = '';
+showToast('تم مسح نتيجة البحث', 'info', 'ℹ️');
+}
+function injectClearSearchButton() {
+if (document.getElementById('clear-customer-search-btn')) return;
+var searchBtn = null;
+var btns = Array.prototype.slice.call(document.querySelectorAll('button'));
+searchBtn = btns.find(function (b) { return (b.getAttribute('onclick') || '').indexOf('doSearchCustomer') !== -1 || (b.textContent || '').trim() === 'بحث'; });
+if (searchBtn && searchBtn.parentNode) {
+var cb = document.createElement('button');
+cb.id = 'clear-customer-search-btn';
+cb.className = 'btn-ghost';
+cb.innerHTML = '<i class="fas fa-eraser"></i> إلغاء البحث';
+cb.onclick = clearCustomerSearch;
+searchBtn.parentNode.insertBefore(cb, searchBtn.nextSibling);
+}
+}
+setTimeout(injectClearSearchButton, 800);
+
 async function doSearchCustomer() {
 var name = document.getElementById('customer-search').value.trim();
 var month = document.getElementById('customer-month').value;
@@ -740,14 +1079,15 @@ function renderCustomerSearchResults(data, name, month, year) {
 const results = document.getElementById('customer-results');
 if (!results) return;
 if (data && data.ambiguous) {
-results.innerHTML = '<div class="search-result-card"><div class="open-head"><h3 class="panel-title" style="margin:0"><i class="fas fa-users"></i> وُجد ' + data.matches.length + ' عملاء بهذا الاسم — اختر العميل</h3></div><div class="open-invoices">' + data.matches.map(function (m) { return '<div class="invoice-check-row" onclick="doSearchCustomerExact(\'' + encodeURIComponent(m.name) + '\')"><div class="search-avatar" style="width:38px;height:38px;font-size:16px">' + escapeHtml((m.name || '?').charAt(0)) + '</div><div class="icr-info"><div class="icr-prod">' + escapeHtml(m.name) + '</div><div class="icr-meta">' + m.visits + ' فاتورة</div></div><div class="icr-amt"><span class="icr-unpaid">' + fmtMoney(m.unpaid) + ' ج.م</span><span class="icr-total">متبقي</span></div></div>'; }).join('') + '</div></div>';
+results.innerHTML = '<div class="search-result-card"><div class="open-head"><h3 class="panel-title" style="margin:0"><i class="fas fa-users"></i> وُجد ' + data.matches.length + ' عملاء بهذا الاسم — اختر العميل</h3><button class="btn-ghost" onclick="clearCustomerSearch()"><i class="fas fa-eraser"></i> إلغاء البحث</button></div><div class="open-invoices">' + data.matches.map(function (m) { return '<div class="invoice-check-row" onclick="doSearchCustomerExact(\'' + encodeURIComponent(m.name) + '\')"><div class="search-avatar" style="width:38px;height:38px;font-size:16px">' + escapeHtml((m.name || '?').charAt(0)) + '</div><div class="icr-info"><div class="icr-prod">' + escapeHtml(m.name) + '</div><div class="icr-meta">' + m.visits + ' فاتورة</div></div><div class="icr-amt"><span class="icr-unpaid">' + fmtMoney(m.unpaid) + ' ج.م</span><span class="icr-total">متبقي</span></div></div>'; }).join('') + '</div></div>';
 return;
 }
 if (!data || !data.found) {
 results.innerHTML = '<div class="search-result-card"><div class="empty-state"><i class="fas fa-user-slash"></i> لم يتم العثور على العميل في الفترة المحددة</div></div>';
 return;
 }
-results.innerHTML = '<div class="search-result-card stmt-card">' + buildStatementHtml(data) + '</div>';
+// ✅ زرار إلغاء البحث فوق النتيجة
+results.innerHTML = '<div style="display:flex; justify-content:flex-end; margin-bottom:8px;"><button class="btn-ghost" onclick="clearCustomerSearch()"><i class="fas fa-eraser"></i> إلغاء نتيجة البحث</button></div><div class="search-result-card stmt-card">' + buildStatementHtml(data) + '</div>';
 setTimeout(function() {
 const fill = results.querySelector('.stmt-progress-fill');
 if (fill) fill.style.width = (fill.getAttribute('data-w') || 0) + '%';
@@ -794,7 +1134,7 @@ if (payments.length > 0) {
 paymentsHtml = '<div style="margin-top:20px;padding-top:20px;border-top:2px dashed var(--line);">';
 paymentsHtml += '<h4 style="margin-bottom:12px;display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;"><i class="fas fa-hand-holding-dollar" style="color:#06b6d4;"></i>سجل القبض (' + payments.length + ' عملية)</h4>';
 payments.forEach(function (p, idx) {
-const methodLabel = ({ cash: 'نقدي', vodafone: 'فودافون كاش', credit: 'آجل' })[(p.method || '').toLowerCase()] || p.method || 'نقدي';
+const methodLabel = ({ cash: 'نقدي', vodafone: 'فودافون كاش', credit: 'آجل', instapay: 'InstaPay' })[(p.method || '').toLowerCase()] || p.method || 'نقدي';
 paymentsHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);margin-bottom:8px;animation:rdRow .4s var(--ease-out) both;animation-delay:' + (idx * 60) + 'ms;">';
 paymentsHtml += '<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap;"><span style="font-weight:800;color:var(--success-bright);font-family:var(--font-mono);font-size:15px;">+ ' + safeNum(p.amount).toFixed(2) + ' ج.م</span><span style="font-size:11px;padding:2px 9px;background:rgba(59,130,246,0.12);color:var(--brand-blue-bright);border-radius:var(--radius-full);font-weight:700;">' + escapeHtml(methodLabel) + '</span></div>';
 paymentsHtml += '<div style="font-size:11px;color:var(--text-tertiary);display:flex;align-items:center;gap:5px;flex-wrap:wrap;"><i class="fas fa-calendar"></i> ' + escapeHtml(p.date);
@@ -824,7 +1164,8 @@ showToast('خطأ: ' + err.message, 'error');
 }
 }
 function closeCustomerModal() { var modal = document.getElementById('customer-modal'); if (modal) modal.classList.add('hidden'); }
-// ===== Collections (القبض على الحساب) =====
+
+// ===== Collections =====
 function loadCollections() {
 collectionStatement = null;
 var search = document.getElementById('collection-search'); if (search) search.value = '';
@@ -860,7 +1201,7 @@ html += '<div class="glass-panel"><div class="open-head"><h3 class="panel-title"
 if (!open.length) html += '<div class="empty-state"><i class="fas fa-circle-check"></i> لا توجد فواتير مفتوحة — الحساب خالص ✅</div>';
 else html += '<div class="table-responsive"><table class="table-modern invoice-table"><thead><tr><th>التاريخ</th><th>المنتجات</th><th>الإجمالي</th><th>المتبقي</th></tr></thead><tbody>' + open.map(function (inv) { return '<tr><td style="font-family:var(--font-mono);">' + escapeHtml(inv.date) + (inv.time ? ' ' + escapeHtml(inv.time) : '') + '</td><td style="font-weight:600;">' + escapeHtml(inv.product) + (inv.cashier ? '<div style="font-size:11px;color:var(--text-tertiary);font-weight:400;"><i class="fas fa-user-tie"></i> ' + escapeHtml(inv.cashier) + '</div>' : '') + '</td><td style="font-family:var(--font-mono);">' + safeNum(inv.total).toFixed(2) + ' ج.م</td><td style="font-family:var(--font-mono); color:var(--danger-bright);">' + safeNum(inv.unpaid).toFixed(2) + ' ج.م</td></tr>'; }).join('') + '</tbody></table></div>';
 html += '</div>';
-html += '<div class="glass-panel"><h3 class="panel-title"><i class="fas fa-money-bill-wave"></i> تسجيل قبض جديد</h3><div class="collection-form-grid"><div class="input-field"><i class="fas fa-coins input-icon"></i><input id="coll-amount" type="number" min="0" step="any" placeholder=" "/><label>المبلغ المقبوض</label><div class="input-border"></div></div><div class="input-field"><i class="fas fa-wallet input-icon"></i><select id="coll-method"><option value="cash">نقدي</option><option value="vodafone">فودافون كاش</option></select><label>طريقة الدفع</label><div class="input-border"></div></div><div class="input-field" style="grid-column: 1 / -1;"><i class="fas fa-note-sticky input-icon"></i><input id="coll-note" type="text" placeholder=" "/><label>ملاحظة (اختياري)</label><div class="input-border"></div></div></div><div style="display:flex; gap:10px; margin-top:16px;"><button class="btn-magnetic btn-success" onclick="recordCollectionPayment()"><span class="btn-bg"></span><span class="btn-content"><i class="fas fa-check"></i> تسجيل القبض</span></button><button class="btn-ghost" onclick="searchCollectionCustomer()"><i class="fas fa-arrows-rotate"></i> إعادة تحميل</button></div></div>';
+html += '<div class="glass-panel"><h3 class="panel-title"><i class="fas fa-money-bill-wave"></i> تسجيل قبض جديد</h3><div class="collection-form-grid"><div class="input-field"><i class="fas fa-coins input-icon"></i><input id="coll-amount" type="number" min="0" step="any" placeholder=" " /><label>المبلغ المقبوض</label><div class="input-border"></div></div><div class="input-field"><i class="fas fa-wallet input-icon"></i><select id="coll-method"><option value="cash">نقدي</option><option value="vodafone">فودافون كاش</option></select><label>طريقة الدفع</label><div class="input-border"></div></div><div class="input-field" style="grid-column: 1 / -1;"><i class="fas fa-note-sticky input-icon"></i><input id="coll-note" type="text" placeholder=" " /><label>ملاحظة (اختياري)</label><div class="input-border"></div></div></div><div style="display:flex; gap:10px; margin-top:16px;"><button class="btn-magnetic btn-success" onclick="recordCollectionPayment()"><span class="btn-bg"></span><span class="btn-content"><i class="fas fa-check"></i> تسجيل القبض</span></button><button class="btn-ghost" onclick="searchCollectionCustomer()"><i class="fas fa-arrows-rotate"></i> إعادة تحميل</button></div></div>';
 var pays = st.payments || [];
 html += '<div class="glass-panel"><h3 class="panel-title"><i class="fas fa-clock-rotate-left"></i> سجل القبض السابق (' + pays.length + ')</h3>';
 if (!pays.length) html += '<div class="empty-state"><i class="fas fa-receipt"></i> لا توجد عمليات قبض مسجّلة بعد</div>';
@@ -886,6 +1227,7 @@ await searchCollectionCustomer();
 hideLoading();
 }
 function clearCollectionForm() { loadCollections(); }
+
 async function loadExpenses() {
 if (currentUser.role !== 'manager') return;
 showLoading();
@@ -1017,7 +1359,8 @@ try { var result = await apiPost('deleteUser', { requestorUsername: currentUser.
 catch (err) { showToast(err.message, 'error'); }
 hideLoading();
 }
-// ===== ✅ تقفيل الشيفت =====
+
+// ===== تقفيل الشيفت =====
 function toLocalInput(d) {
 var p = function (n) { return String(n).padStart(2, '0'); };
 return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -1071,7 +1414,8 @@ html += shiftKpi('عدد الفواتير', s.invoiceCount, 'fa-receipt', 'kpi-b
 html += shiftKpi('متوسط الفاتورة', s.avgInvoice, 'fa-calculator', 'kpi-green');
 html += '</div>';
 html += '<div class="shift-netcash ' + (netCash >= 0 ? 'positive' : 'negative') + '"><div class="netcash-label"><i class="fas fa-vault"></i> صافي النقدية المتوقعة في الدرج</div><div class="netcash-formula">نقدي مبيعات (' + fmtMoney(s.pbCash) + ') + قبض نقدي (' + fmtMoney(s.collCash) + ') − مصروفات (' + fmtMoney(s.totalExpenses) + ')</div><div class="netcash-value">' + fmtMoney(netCash) + ' ج.م</div></div>';
-html += '<div class="shift-paybreak"><div class="pb-row"><div class="pb-icon" style="background:#10b981"><i class="fas fa-money-bill-wave"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">نقدي (مبيعات)</span><span class="pb-amount">' + fmtMoney(s.pbCash) + ' ج.م</span></div></div></div><div class="pb-row"><div class="pb-icon" style="background:#e60000"><i class="fas fa-mobile-screen"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">فودافون كاش (مبيعات)</span><span class="pb-amount">' + fmtMoney(s.pbVodafone) + ' ج.م</span></div></div></div><div class="pb-row"><div class="pb-icon" style="background:#f59e0b"><i class="fas fa-clock"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">آجل</span><span class="pb-amount">' + fmtMoney(s.pbCredit) + ' ج.م</span></div></div></div></div>';
+var pbInstapay = safeNum(s.pbInstapay);
+html += '<div class="shift-paybreak"><div class="pb-row"><div class="pb-icon" style="background:#10b981"><i class="fas fa-money-bill-wave"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">نقدي (مبيعات)</span><span class="pb-amount">' + fmtMoney(s.pbCash) + ' ج.م</span></div></div></div><div class="pb-row"><div class="pb-icon" style="background:#e60000"><i class="fas fa-mobile-screen"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">فودافون كاش (مبيعات)</span><span class="pb-amount">' + fmtMoney(s.pbVodafone) + ' ج.م</span></div></div></div>' + (pbInstapay > 0 ? '<div class="pb-row"><div class="pb-icon" style="background:#8b5cf6"><i class="fas fa-building-columns"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">InstaPay (مبيعات)</span><span class="pb-amount">' + fmtMoney(pbInstapay) + ' ج.م</span></div></div></div>' : '') + '<div class="pb-row"><div class="pb-icon" style="background:#f59e0b"><i class="fas fa-clock"></i></div><div class="pb-info"><div class="pb-top"><span class="pb-label">آجل</span><span class="pb-amount">' + fmtMoney(s.pbCredit) + ' ج.م</span></div></div></div></div>';
 html += '<div class="glass-panel"><h3 class="panel-title"><i class="fas fa-list-check"></i> حركة الفترة (فواتير + قبض) — ' + (data.entries || []).length + ' عملية</h3>';
 if (!(data.entries || []).length) html += '<div class="empty-state"><i class="fas fa-inbox"></i> لا توجد عمليات في هذه الفترة</div>';
 else {
@@ -1101,6 +1445,8 @@ else { html += '<div class="table-responsive"><table class="table-modern"><thead
 html += '</div>';
 box.innerHTML = html;
 }
+
+// ===== ✅ تسجيل كل الـ functions الجديدة على window =====
 window.doLogin = doLogin; window.doLogout = doLogout; window.toggleTheme = toggleTheme; window.toggleSidebar = toggleSidebar;
 window.showSection = showSection; window.refreshCurrentSection = refreshCurrentSection;
 window.openCommandPalette = openCommandPalette; window.closeCommandPalette = closeCommandPalette; window.filterCommands = filterCommands; window.executeCommand = executeCommand;
@@ -1110,6 +1456,9 @@ window.updateActiveInvoiceCustomer = updateActiveInvoiceCustomer; window.updateA
 window.onPosPaidInput = onPosPaidInput; window.printActiveInvoice = printActiveInvoice; window.clearActiveInvoice = clearActiveInvoice;
 window.setPaymentMethod = setPaymentMethod; window.saveCurrentInvoice = saveCurrentInvoice; window.renderPaymentButtons = renderPaymentButtons;
 window.loadInventory = loadInventory; window.addProduct = addProduct;
+window.setInventoryFilter = setInventoryFilter; window.openEditProduct = openEditProduct; window.closeEditProductModal = closeEditProductModal; window.saveProductEdit = saveProductEdit; window.toggleUnlimited = toggleUnlimited;
+window.openInvoicesModal = openInvoicesModal; window.closeInvoicesModal = closeInvoicesModal; window.onInvoiceFilterChange = onInvoiceFilterChange; window.confirmDeleteInvoice = confirmDeleteInvoice;
+window.clearCustomerSearch = clearCustomerSearch;
 window.loadCustomers = loadCustomers; window.setCustomerFilter = setCustomerFilter; window.doSearchCustomer = doSearchCustomer; window.doSearchCustomerExact = doSearchCustomerExact; window.openCustomerInvoices = openCustomerInvoices; window.closeCustomerModal = closeCustomerModal; window.openInvoiceDetails = openInvoiceDetails;
 window.loadCollections = loadCollections; window.searchCollectionCustomer = searchCollectionCustomer; window.pickCollectionCustomer = pickCollectionCustomer; window.recordCollectionPayment = recordCollectionPayment; window.clearCollectionForm = clearCollectionForm;
 window.loadExpenses = loadExpenses; window.saveExpense = saveExpense;
@@ -1117,4 +1466,3 @@ window.searchWasteProduct = searchWasteProduct; window.selectWasteProduct = sele
 window.loadReport = loadReport; window.updatePaymentStatus = updatePaymentStatus;
 window.loadUsers = loadUsers; window.saveUser = saveUser; window.resetUserForm = resetUserForm; window.editUser = editUser; window.deleteUser = deleteUser; window.toggleRolePermissions = toggleRolePermissions;
 window.applyShiftPreset = applyShiftPreset; window.generateShiftReport = generateShiftReport;
-window.toggleUnlimited = toggleUnlimited;
