@@ -1,0 +1,14 @@
+/* ═══════════ BX Modules — أنماط إضافية معزولة ═══════════ */
+#bx-scanner-modal video { border-radius: var(--radius-md); min-height: 260px; object-fit: cover; }
+.bx-lbl-chk { width: 17px; height: 17px; accent-color: var(--brand-blue); cursor: pointer; }
+#bx-st-scan:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,0.25); }
+.bx-fade-in { animation: fadeInUp .4s var(--ease-out); }
+/* تلميحات سجل النشاط */
+#bx-aud-table tbody tr { cursor: help; }
+/* نافذة فاتورة الشراء */
+#bx-purchase-modal input, #bx-purchase-modal select { font-family: inherit; }
+@media (max-width: 768px) {
+  #bx-purchase-modal .command-modal { max-width: 96vw !important; }
+  #bx-purchase-modal > div > div > div[style*="grid-template-columns:2fr"] { grid-template-columns: 1fr 1fr !important; }
+}
+@media print { .bx-no-print { display: none !important; } }
