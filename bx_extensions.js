@@ -1128,7 +1128,7 @@ function bxLoadAudit() {
   };
 })();
 /* ═══ (4) تحديث تلقائي من GitHub — يتجاوز الكاش ═══ */
-var BX_GITHUB_RAW = 'https://raw.githubusercontent.com/USERNAME/REPO/main/version.json'; // ← بياناتك
+var BX_GITHUB_RAW = 'var BX_GITHUB_RAW = "https://raw.githubusercontent.com/anaaho613-beep/-/main/version.json";'; // ← بياناتك
 
 window.bxCheckUpdate = function () {
   if (!BX_CONFIG.autoUpdate || sessionStorage.getItem('bx_update_dismissed')) return;
